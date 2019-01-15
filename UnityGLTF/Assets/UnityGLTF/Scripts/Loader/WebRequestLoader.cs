@@ -1,15 +1,10 @@
 ﻿using System;
-using System.Collections;
 using System.IO;
-using GLTF;
-using UnityEngine;
-using System.Text.RegularExpressions;
 using System.Net;
-using UnityEngine.Networking;
-
-#if WINDOWS_UWP
+using System.Net.Http;
+using System.Net.Security;
+using System.Security.Cryptography.X509Certificates;
 using System.Threading.Tasks;
-#endif
 
 namespace UnityGLTF.Loader
 {
@@ -17,44 +12,65 @@ namespace UnityGLTF.Loader
 	{
 		public Stream LoadedStream { get; private set; }
 
-		private string _rootURI;
+		public bool HasSyncLoadMethod => false;
 
-		public WebRequestLoader(string rootURI)
+		private readonly HttpClient httpClient = new HttpClient();
+
+		public WebRequestLoader(string rootUri)
 		{
-			_rootURI = rootURI;
+			ServicePointManager.ServerCertificateValidationCallback = ValidateServerCertificate;
+			httpClient.BaseAddress = new Uri(rootUri);
 		}
 
-		public IEnumerator LoadStream(string gltfFilePath)
+		public async Task LoadStream(string gltfFilePath)
 		{
 			if (gltfFilePath == null)
 			{
-				throw new ArgumentNullException("gltfFilePath");
+				throw new ArgumentNullException(nameof(gltfFilePath));
 			}
 
-			yield return CreateHTTPRequest(_rootURI, gltfFilePath);
+			var response = await httpClient.GetAsync(new Uri(httpClient.BaseAddress, gltfFilePath));
+			response.EnsureSuccessStatusCode();
+
+			// HACK: Download the whole file before returning the stream
+			// Ideally the parsers would wait for data to be available, but they don't.
+			LoadedStream = new MemoryStream((int?)response.Content.Headers.ContentLength ?? 5000);
+			await response.Content.CopyToAsync(LoadedStream);
+
+			response.Dispose();
 		}
 
-		private IEnumerator CreateHTTPRequest(string rootUri, string httpRequestPath)
+		public void LoadStreamSync(string jsonFilePath)
 		{
-			UnityWebRequest www = new UnityWebRequest(Path.Combine(rootUri, httpRequestPath), "GET", new DownloadHandlerBuffer(), null);
-			www.timeout = 5000;
-#if UNITY_2017_2_OR_NEWER
-			yield return www.SendWebRequest();
-#else
-			yield return www.Send();
-#endif
-			if ((int)www.responseCode >= 400)
+			throw new NotImplementedException();
+		}
+
+		// enables HTTPS support
+		// https://answers.unity.com/questions/50013/httpwebrequestgetrequeststream-https-certificate-e.html
+		private static bool ValidateServerCertificate(object sender, X509Certificate certificate, X509Chain chain, SslPolicyErrors errors)
+		{
+			bool isOk = true;
+			// If there are errors in the certificate chain, look at each error to determine the cause.
+			if (errors != SslPolicyErrors.None)
 			{
-				Debug.LogErrorFormat("{0} - {1}", www.responseCode, www.url);
-				throw new Exception("Response code invalid");
+				for (int i = 0; i<chain.ChainStatus.Length; i++)
+				{
+					if (chain.ChainStatus[i].Status != X509ChainStatusFlags.RevocationStatusUnknown)
+					{
+						chain.ChainPolicy.RevocationFlag = X509RevocationFlag.EntireChain;
+						chain.ChainPolicy.RevocationMode = X509RevocationMode.Online;
+						chain.ChainPolicy.UrlRetrievalTimeout = new TimeSpan(0, 1, 0);
+						chain.ChainPolicy.VerificationFlags = X509VerificationFlags.AllFlags;
+						bool chainIsValid = chain.Build((X509Certificate2)certificate);
+						if (!chainIsValid)
+						{
+							isOk = false;
+						}
+					}
+				}
 			}
 
-			if (www.downloadedBytes > int.MaxValue)
-			{
-				throw new Exception("Stream is larger than can be copied into byte array");
-			}
-
-			LoadedStream = new MemoryStream(www.downloadHandler.data, 0, www.downloadHandler.data.Length, true, true);
+			return isOk;
 		}
 	}
 }

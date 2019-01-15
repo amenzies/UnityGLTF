@@ -60,7 +60,6 @@ artifacts/
 *.pdb
 *.pgc
 *.pgd
-*.rsp
 *.sbr
 *.tlb
 *.tli
@@ -149,3 +148,5 @@ _pkginfo.txt
 *.[Cc]ache
 # but keep track of directories ending in .cache
 !*.[Cc]ache/
+
+*.orig
